@@ -26,38 +26,38 @@ import org.junit.runners.JUnit4;
 public class AccessorTest {
 
   @Test
-  public void loadClass_findsExactMatch() {
+  public void resolveClassName_findsExactMatch() {
     // ARRANGE
     String className = "java.lang.String";
-    Accessor accessor = new Accessor();
+    Accessor accessor = new Accessor(new NoOpListener());
 
     // ACT
-    Class<?> loadClass = accessor.loadClass(className);
+    String resolvedName = accessor.resolveClassName(className);
 
     // ASSERT
-    assertThat(loadClass.getName()).isEqualTo(className);
+    assertThat(resolvedName).isEqualTo(className);
   }
 
   @Test
   public void loadClass_findsRegexMatch() {
     // ARRANGE
-    Accessor accessor = new Accessor();
+    Accessor accessor = new Accessor(new NoOpListener());
     String className = "uk.ac.cam.cl.dtg.teaching.*.AccessorTest";
 
     // ACT
-    Class<?> loadClass = accessor.loadClass(className);
+    String resolvedName = accessor.resolveClassName(className);
 
     // ASSERT
-    assertThat(loadClass.getName()).isEqualTo(getClass().getName());
+    assertThat(resolvedName).isEqualTo(getClass().getName());
   }
 
   @Test
   public void loadClass_throws_withAmbiguousMatch() {
     // ARRANGE
     String className = getClass().getPackageName() + ".*";
-    Accessor accessor = new Accessor();
+    Accessor accessor = new Accessor(new NoOpListener());
 
     // ACT + ASSERT
-    assertThrows(AccessorException.class, () -> accessor.loadClass(className));
+    assertThrows(AccessorException.class, () -> accessor.resolveClassName(className));
   }
 }

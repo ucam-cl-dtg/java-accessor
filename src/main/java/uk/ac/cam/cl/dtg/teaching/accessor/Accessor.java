@@ -28,61 +28,30 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 public class Accessor {
 
-  /** Load the class by searching the classpath and return it. */
-  public Class<?> loadClass(String className) {
-    try {
-      return getClass().getClassLoader().loadClass(className);
-    } catch (ClassNotFoundException e) {
-      // ignore
-    }
+  private final TestActionListener actionListener;
 
-    ImmutableList<String> matchingClassNames = scanForMatchingClassNames(className);
-    if (matchingClassNames.isEmpty()) {
-      throw new AccessorException(
-          new ClassNotFoundException("Failed to find a class matching name " + className));
-    }
-    if (matchingClassNames.size() > 1) {
-      throw new AccessorException(
-          new ClassNotFoundException(
-              "Found multiple classes matching name "
-                  + className
-                  + ":"
-                  + matchingClassNames.stream().collect(Collectors.joining(","))));
-    }
-    try {
-      return getClass().getClassLoader().loadClass(matchingClassNames.get(0));
-    } catch (ClassNotFoundException e) {
-      throw new AccessorException(e);
-    }
-  }
-
-  private ImmutableList<String> scanForMatchingClassNames(String className) {
-    Pattern p = Pattern.compile(className);
-    try {
-      return ClassPath.from(getClass().getClassLoader()).getTopLevelClasses().stream()
-          .map(ClassPath.ClassInfo::getName)
-          .filter(p.asMatchPredicate())
-          .collect(toImmutableList());
-    } catch (IOException e) {
-      throw new AccessorException("Failed to scan for matching class names", e);
-    }
+  public Accessor(TestActionListener actionListener) {
+    this.actionListener = actionListener;
   }
 
   /** Create a new instance of the class given (from searching the classpath). */
-  public Object construct(String className, Object... params) {
-    Class<?> clazz = loadClass(className);
+  public Object construct(String instanceName, String className, Object... params) {
+    String realName = resolveClassName(className);
+    actionListener.constructingClass(realName, Arrays.asList(params));
+    Class<?> clazz = loadClass(realName);
     for (Constructor<?> c : clazz.getDeclaredConstructors()) {
       if (paramMatch(c.getParameterTypes(), params)) {
         c.setAccessible(true);
         try {
-          return c.newInstance(params);
+          Object result = c.newInstance(params);
+          actionListener.createdObject(instanceName, result);
+          return result;
         } catch (InstantiationException
             | IllegalAccessException
             | IllegalArgumentException
@@ -105,10 +74,13 @@ public class Accessor {
   public <T> T getField(Object instance, String field) {
     Class<?> c;
     if (instance instanceof String) {
-      c = loadClass((String) instance);
+      String className = resolveClassName((String) instance);
+      actionListener.gettingStaticField(className, field);
+      c = loadClass(className);
       instance = null;
     } else {
       c = instance.getClass();
+      actionListener.gettingInstanceField(instance, field);
     }
 
     Set<Field> fields = new HashSet<>();
@@ -134,7 +106,7 @@ public class Accessor {
     try {
       return this.methodInvoker(o, methodName, params);
     } catch (InvocationTargetException e) {
-      throw new AccessorException(e);
+      throw new AccessorException(e.getTargetException());
     }
   }
 
@@ -144,19 +116,6 @@ public class Accessor {
       params = new String[] {};
     }
     return invoke(className, "main", new Object[] {params});
-  }
-
-  /**
-   * Invoke the given method, catching any exception and returning the name of the exception as a
-   * string. If no exception is thrown returns null.
-   */
-  public String invokeCatch(String className, String methodName, Object... params) {
-    try {
-      methodInvoker(loadClass(className), null, methodName, params);
-      return null;
-    } catch (InvocationTargetException e) {
-      return e.getTargetException().getClass().getName();
-    }
   }
 
   private static boolean primitiveMatch(Class<?> primitive, Class<?> boxed, Object param) {
@@ -207,10 +166,13 @@ public class Accessor {
 
     Class<?> c;
     if (o instanceof String) { // this is a class name
-      c = loadClass((String) o);
+      String className = resolveClassName((String) o);
+      actionListener.invokingStaticMethod(className, methodName, Arrays.asList(params));
+      c = loadClass(className);
       o = null;
     } else {
       c = o.getClass();
+      actionListener.invokingInstanceMethod(o, methodName, Arrays.asList(params));
     }
 
     Set<Method> methods = new HashSet<>();
@@ -239,7 +201,39 @@ public class Accessor {
                 o == null ? "Static" : "Instance", methodName, c.getName())));
   }
 
-  private void addMethodList(Class<?> c, Set<Method> result) {
+  private Class<?> loadClass(String className) {
+    try {
+      return getClass().getClassLoader().loadClass(className);
+    } catch (ClassNotFoundException e) {
+      throw new AccessorException(e);
+    }
+  }
+
+  String resolveClassName(String className) {
+    Pattern p = Pattern.compile(className);
+    try {
+      ImmutableList<String> names =
+          ClassPath.from(getClass().getClassLoader()).getTopLevelClasses().stream()
+              .map(ClassPath.ClassInfo::getName)
+              .filter(p.asMatchPredicate())
+              .collect(toImmutableList());
+      if (names.isEmpty()) {
+        return className;
+      }
+      if (names.size() > 1) {
+        throw new AccessorException(
+            "Ambiguous class name "
+                + className
+                + " could match "
+                + names.stream().collect(Collectors.joining(",")));
+      }
+      return names.get(0);
+    } catch (IOException e) {
+      throw new AccessorException("Failed to scan for matching class names", e);
+    }
+  }
+
+  private static void addMethodList(Class<?> c, Set<Method> result) {
     if (c == null) {
       return;
     }
@@ -247,7 +241,7 @@ public class Accessor {
     addMethodList(c.getSuperclass(), result);
   }
 
-  private void addFieldList(Class<?> c, Set<Field> result) {
+  private static void addFieldList(Class<?> c, Set<Field> result) {
     if (c == null) {
       return;
     }
